@@ -1,0 +1,9 @@
+Author: Nicholas Nell
+Email: nicholas.nell@colorado.edu
+
+Updated: 03-21-2013
+
+This bundle contains PCB designs and firmware for a 6-tube Nixie clock
+that has the ability to be clocked from 3 separate sources (32 kHz
+crystal, TCXO RTC, GPS). 
+
