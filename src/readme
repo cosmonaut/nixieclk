@@ -1,0 +1,8 @@
+Author: Nicholas Nell
+Email: nico.nell@gmail.com
+
+This software is for a nixie clock based on an at90usb1287
+microcontroller. The LUFA (http://www.fourwalledcubicle.com/LUFA.php)
+USB stack is used to handle communications between the clock and the
+user.
+
