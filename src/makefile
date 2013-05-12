@@ -57,6 +57,9 @@ AVRDUDE_WRITE_FLASH = -U flash:w:$(TARGET).hex
 
 AVRDUDE_MCU = usb1287
 
+# Period (in microseconds) of SPI bitclock 
+AVRDUDE_BITCLOCK = -B 0.25
+
 # Uncomment the following if you want avrdude's erase cycle counter.
 # Note that this counter needs to be initialized first using -Yn,
 # see avrdude manual.
@@ -75,6 +78,7 @@ AVRDUDE_FLAGS = -p $(AVRDUDE_MCU) -P $(AVRDUDE_PORT) -c $(AVRDUDE_PROGRAMMER)
 AVRDUDE_FLAGS += $(AVRDUDE_NO_VERIFY)
 AVRDUDE_FLAGS += $(AVRDUDE_VERBOSE)
 AVRDUDE_FLAGS += $(AVRDUDE_ERASE_COUNTER)
+AVRDUDE_FLAGS += $(AVRDUDE_BITCLOCK)
 
 # Program the device.  
 program: $(TARGET).hex $(TARGET).eep
@@ -83,5 +87,6 @@ program: $(TARGET).hex $(TARGET).eep
 readfuses:
 	$(AVRDUDE) $(AVRDUDE_FLAGS) -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h
 
+# Fuses: low 0xDE high 0x91 extended 0xf3
 writefuses:
 	$(AVRDUDE) $(AVRDUDE_FLAGS) -U lfuse:w:0xde:m -U hfuse:w:0x91:m -U efuse:w:0xf3:m
