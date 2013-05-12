@@ -5,6 +5,7 @@
 #include "main.h"
 #include "twi_master.h"
 #include "ds3231.h"
+#include "uart.h"
 
 /* usb data transmit ready status */
 volatile bool dtr_status;
@@ -48,7 +49,7 @@ USB_ClassInfo_CDC_Device_t VirtualSerial_CDC_Interface = {
  * virtual CDC COM port can be used like any regular character stream
  * in the C APIs
  */
-static FILE USBSerialStream;
+//static FILE USBSerialStream;
 
 
 /* Main program entry point. This routine contains the overall program
@@ -66,20 +67,20 @@ int main(void) {
     float t = 0.0;
     uint8_t memwad[19];
     uint8_t e_stat = 0;
+    uint8_t uart_byte = 0x00;
 
     /* Initialize at90usb1287 peripherals */
     setup_hardware();
 
     /* Create a regular character stream for the interface so that it
        can be used with the stdio.h functions */
-    CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
+    //CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
 
     /* enable interrupts */
     sei();
 
     /* Initialize the DS3231 RTC */
     ds3231_init();
-
 
     /* make the magic happen */
     for (;;) {
@@ -171,9 +172,20 @@ int main(void) {
                     //cdc_dev_status = Cget multiple bytesDC_Device_SendData(&VirtualSerial_CDC_Interface, memwad, 19);
                     sw = 1;
                 }
+
+                /* Temporary GPS echo from uart -> usb */
+                if (UCSR1A & (1 << RXC1)) {
+                    while (UCSR1A & (1 << RXC1)) {
+                        uart_byte = uart_receive();
+                        cdc_dev_status = CDC_Device_SendByte(&VirtualSerial_CDC_Interface, uart_byte);
+                    }
+                }
+
             }
         }
         
+       
+
         CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
         USB_USBTask();
     }
@@ -200,6 +212,10 @@ void setup_hardware(void) {
 
     /* init TWI */
     TWI_init();
+
+    /* init uart */
+    uart_init(0x00);
+
     /* Hardware Initialization */
     USB_Init();
 }
@@ -227,9 +243,10 @@ void EVENT_USB_Device_Connect(void) {
     //LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
     /* Switching PSU seems to put junk in the USB registers on boot --
        this gets rid of it. */
-    if (USB_DeviceState == DEVICE_STATE_Configured) {
-        CDC_Device_Flush(&VirtualSerial_CDC_Interface);
-    }
+    // if (USB_DeviceState == DEVICE_STATE_Configured) {
+    //     CDC_Device_Flush(&VirtualSerial_CDC_Interface);
+    //     CDC_Device_SendString(&VirtualSerial_CDC_Interface, "FLUSHED!");
+    // }
 }
 
 /* Event handler for the library USB Disconnection event. */
@@ -242,6 +259,12 @@ void EVENT_USB_Device_ConfigurationChanged(void) {
     bool ConfigSuccess = true;
 
     ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
+
+    /* This doesn't always work... ? */
+    if (USB_DeviceState == DEVICE_STATE_Configured) {
+        CDC_Device_Flush(&VirtualSerial_CDC_Interface);
+    }
+
 }
 
 /* Event handler for the library USB Control Request reception event. */
