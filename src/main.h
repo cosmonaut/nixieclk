@@ -37,16 +37,10 @@
 #define _MAIN_H_
 
 /* Includes: */
-#include <avr/io.h>
-#include <avr/wdt.h>
-#include <avr/power.h>
-#include <avr/interrupt.h>
-#include <string.h>
-#include <stdio.h>
 #include <LUFA/Drivers/USB/USB.h>
 #include "descriptors.h"
 
-volatile uint8_t pps;
+//volatile uint8_t pps;
 
 typedef struct {
     volatile uint8_t seconds;

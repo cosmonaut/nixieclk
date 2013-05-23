@@ -2,13 +2,29 @@
    Author: Nicholas Nell
 */
 
+#include <avr/io.h>
+#include <avr/wdt.h>
+#include <avr/power.h>
+#include <avr/interrupt.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "main.h"
-#include "twi_master.h"
 #include "ds3231.h"
+#include "twi_master.h"
 #include "uart.h"
+#include "mtk3339.h"
+#include "nmea.h"
+
+#define GPS_FIX_NEW 1
+#define GPS_FIX_STABLE 2
+#define GPS_FIX_NONE 3
+
+static inline uint8_t tmod(uint8_t a);
 
 /* usb data transmit ready status */
 volatile bool dtr_status;
+volatile uint8_t seconds_cnt = 0;
 nixie_time_t the_time = {.seconds = 0, 
                          .minutes = 0, 
                          .hours = 0}; 
@@ -64,10 +80,12 @@ int main(void) {
     uint8_t sw = 0;
     uint8_t cdc_dev_status = 0;
     char sbuf[255];
-    float t = 0.0;
-    uint8_t memwad[19];
+    //float t = 0.0;
+    //uint8_t memwad[19];
     uint8_t e_stat = 0;
     uint8_t uart_byte = 0x00;
+    uint8_t gps_fix_state = 0;
+    uint8_t mode = 0;
 
     /* Initialize at90usb1287 peripherals */
     setup_hardware();
@@ -76,61 +94,78 @@ int main(void) {
        can be used with the stdio.h functions */
     //CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
 
+    the_time.hours = 0;
+    the_time.minutes = 0;
+    the_time.seconds = 0;
+
     /* enable interrupts */
     sei();
+
+    pgtop = 0;
+    gprmc = 0;
+
+    /* Wait for a valid GPS packet before initializing it (boot
+       time) */
+    while(pgtop < 1) {
+        uart_task();
+    }
 
     /* Initialize the DS3231 RTC */
     ds3231_init();
 
+    /* Initialize MTK3339 GPS unit */
+    mtk3339_init();
+
+    gps_fix_state = 0;
+
     /* make the magic happen */
     for (;;) {
-        /* Must throw away unused bytes from the host, or it will lock
-           up while waiting for the device */
-        // if (USB_DeviceState == DEVICE_STATE_Configured) {
-        //     rx_num_bytes = CDC_Device_BytesReceived(&VirtualSerial_CDC_Interface);
-        //     for (i = 0; i < rx_num_bytes; i++) {
-        //         // we'll need a nice buffer for these in the future...
-        //         my_byte = CDC_Device_ReceiveByte(&VirtualSerial_CDC_Interface);
-        //     }
-        // }
+        /* Check GPS fix status and switch modes if needed */
+        if (gps_fix != gps_fix_state) {
+            gps_fix_state = gps_fix;
+            if (gps_fix) {
+                mode = GPS_FIX_NEW;
+                seconds_cnt = 0;
+                /* 3D Fix on */
+                PORTC |= (1 << PC4);
 
-        if (pps) {
-            //sw = 0;
-            /* wait for TWI and read the whole register */
-            // while (TWI_busy){};
-            // TWI_buffer_out[0] = 0x00;
-            // TWI_master_start_write(DS3231_ADDR, 1);
-            // while (TWI_busy){};
-    
+                /* Enable GPS pps line */
+                // ds3231_disable_int();
+                // the_time.hours = tmod(gps_time.hours - 6);
+                // the_time.minutes = gps_time.minutes;
+                // the_time.seconds = gps_time.seconds;
+                // mtk3339_enable_int();
+            } else {
+                /* Enable ds3231 pps line */
+                mode = GPS_FIX_NONE;
+                mtk3339_disable_int();
+                ds3231_enable_int();
+                /* 3D Fix off */
+                PORTC &= ~(1 << PC4);
 
-            // TWI_master_start_read(DS3231_ADDR, DS3231_NREG);
-            // while (TWI_busy){};
-            // //sprintf(sbuf, "
-            // for (i = 0; i < 19; i++) {
-            //     j += sprintf(sbuf + j, "0x%02X ", TWI_buffer_in[i]);
-            // }
-            // j = 0;
-            //sprintf(sbuf, "%i:%i:%i\n", the_time.hours, the_time.minutes, the_time.seconds);
-            //e_stat = ds3231_get_registers(memwad);
-
-
-            // e_stat = ds3231_print_info(sbuf);
-            // if (!e_stat) {
-            //     sw = 0;
-            // }
-
-            // e_stat = ds3231_get_time_digits(&nixie_time);
-            // sprintf(sbuf, "%i%i:%i%i:%i%i\n", nixie_time.tens_hours,
-            //         nixie_time.hours, nixie_time.tens_minutes, nixie_time.minutes,
-            //         nixie_time.tens_seconds, nixie_time.seconds);
-            // sw = 0;
-
-            pps = 0;
+            }
         }
 
+        /* Handle mode tasks */
+        switch(mode) {
+        case GPS_FIX_NEW:
+            if (seconds_cnt > 9) {
+                mode = GPS_FIX_STABLE;
+                ds3231_disable_int();
+                the_time.hours = tmod(gps_time.hours - 6);
+                the_time.minutes = gps_time.minutes;
+                the_time.seconds = gps_time.seconds;
+                /* Set ds3231 date/time */
+                mtk3339_enable_int();
+            }
+            break;
+        case GPS_FIX_STABLE:
+            break;
+        case GPS_FIX_NONE:
+            break;
+        }
 
-
-        //PORTD &= ~(1 << PD6);            
+        /* USB rx commands */
         if (USB_DeviceState == DEVICE_STATE_Configured) {
             /* Must throw away unused bytes from the host, or it will lock
                up while waiting for the device */
@@ -156,7 +191,55 @@ int main(void) {
                             nixie_time.tens_seconds, nixie_time.seconds);
                     sw = 0;
                     my_byte = 0x00;
+                } else if ((char)my_byte == 'g') {
+                    if (dtr_status) {
+                        sprintf(sbuf, "%i:%i:%i\n", the_time.hours, the_time.minutes, the_time.seconds);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "GPS FIX: ");
+                        itoa(gps_fix, sbuf, 10);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                        //cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(gps_fix, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, gps_time_s);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+
+                        sprintf(sbuf, "%i-%i-%i\n", gps_date.year, gps_date.month, gps_date.day);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                    }
+                } else if ((char)my_byte == 'r') {
+                    mtk3339_set_output_rmc();
+                } else if ((char)my_byte == 'd') {
+                    mtk3339_set_output_default();
+                } else if ((char)my_byte == 'l') {
+                    if (dtr_status) {
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(pgtop, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(npackets, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(uart_rx_overflow, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(RingBuffer_GetCount(&uart_buf), sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(pmtk_ack, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                    }
+                } else if ((char)my_byte == 'u') {
+                    uart_disable();
+                    uart_flush_buffer();
+                    nmea_flush();
+                    uart_init(57600);
+
                 }
+
+
+
             }
             
 
@@ -174,18 +257,17 @@ int main(void) {
                 }
 
                 /* Temporary GPS echo from uart -> usb */
-                if (UCSR1A & (1 << RXC1)) {
-                    while (UCSR1A & (1 << RXC1)) {
-                        uart_byte = uart_receive();
-                        cdc_dev_status = CDC_Device_SendByte(&VirtualSerial_CDC_Interface, uart_byte);
-                    }
-                }
-
+                // if (UCSR1A & (1 << RXC1)) {
+                //     while (UCSR1A & (1 << RXC1)) {
+                //         uart_byte = uart_receive();
+                //         cdc_dev_status = CDC_Device_SendByte(&VirtualSerial_CDC_Interface, uart_byte);
+                //     }
+                // }
             }
         }
         
        
-
+        uart_task();
         CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
         USB_USBTask();
     }
@@ -199,13 +281,18 @@ void setup_hardware(void) {
     MCUSR &= ~(1 << WDRF);
     wdt_disable();
 
-    /* LED to output */
+    /* SMD LED to output */
     DDRD = (1 << PD6);
-    /* LED on */
+    /* SMD LED on */
     PORTD |= (1 << PD6);
 
     /* Disable clock division */
     clock_prescale_set(clock_div_1);
+
+    /* LED0 to output */
+    DDRC |= (1 << PC4);
+    /* LED off! */
+    PORTC &= ~(1 << PC4);
 
     /* INT6 setup for external rising edge */
     ds3231_hw_init();
@@ -214,7 +301,10 @@ void setup_hardware(void) {
     TWI_init();
 
     /* init uart */
-    uart_init(0x00);
+    uart_init_buffer();
+    uart_init(MTK3339_DEFAULT_BAUD);
+
+    mtk3339_hw_init();
 
     /* Hardware Initialization */
     USB_Init();
@@ -222,6 +312,7 @@ void setup_hardware(void) {
 
 /* Call to increment by one second */
 void increment_time(void) {
+    seconds_cnt++;
     the_time.seconds++;
     if (the_time.seconds > 59) {
         the_time.minutes++;
@@ -237,6 +328,17 @@ void increment_time(void) {
         the_time.hours = 0;
     }
 }    
+
+/* Function to make sure any hour of day subtraction comes out between
+   0 and 23 */
+static inline uint8_t tmod(uint8_t t) {
+    if (t > 23) {
+        t = 24 - (256 - t);
+        return t;
+    } 
+    
+    return t;
+}
 
 /* Event handler for the library USB Connection event. */
 void EVENT_USB_Device_Connect(void) {

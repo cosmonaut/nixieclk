@@ -9,7 +9,6 @@
 #include <avr/interrupt.h>
 #include <stdlib.h>
 #include <string.h>
-#include "main.h"
 #include "twi_master.h"
 #include "ds3231.h"
 
@@ -42,7 +41,15 @@ void ds3231_hw_init(void) {
     DDRE &= ~(1 << PE6);
     PORTE &= ~(1 << PE6);
     EICRB |= (1 << ISC61) | (1 << ISC60);
+    ds3231_enable_int();
+}
+
+void ds3231_enable_int(void) {
     EIMSK |= (1 << INT6);
+}
+
+void ds3231_disable_int(void) {
+    EIMSK &= ~(1 << INT6);
 }
 
 /* Initialize the DS3231 chip. TWI_init() must have been called for
@@ -196,7 +203,7 @@ float ds3231_get_temp(void) {
 /* blink LED on square wave stuff (for now) 
    Eventually this will be one of the 1 PPS timing interrupts */
 ISR(INT6_vect) {
-    pps = 1;
+    //pps = 1;
     //PORTD ^= (1 << PD6);
     increment_time();
     if (led) {
