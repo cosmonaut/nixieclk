@@ -34,6 +34,11 @@ static const uint8_t ds3231_init_seq[] PROGMEM = {
 
 volatile uint8_t led = 0;
 
+/* decimal to binary coded decimal helper */
+static inline uint8_t dectobcd(uint8_t k) {
+    return((k/10)*16 + (k%10));
+}
+
 /* Prepare the correct pins and peripherals on the at90usb1287 to
    control the ds3231 */
 void ds3231_hw_init(void) {
@@ -44,10 +49,12 @@ void ds3231_hw_init(void) {
     ds3231_enable_int();
 }
 
+/* Enable interrupt */
 void ds3231_enable_int(void) {
     EIMSK |= (1 << INT6);
 }
 
+/* Disable interrupt */
 void ds3231_disable_int(void) {
     EIMSK &= ~(1 << INT6);
 }
@@ -74,14 +81,50 @@ uint8_t ds3231_init(void) {
     return 0;
 }
 
-// uint8_t ds3231_set_datetime() {
+/* Set ds3231 time */
+void ds3231_set_time(gps_rmc_time_t time) {
+    while(TWI_busy){};
 
-// }
+    /* word address for time set start */
+    TWI_buffer_out[0] = 0x00;
+    TWI_buffer_out[1] = dectobcd(time.seconds);
+    TWI_buffer_out[2] = dectobcd(time.minutes);
+    /* maintain 24-hour setting */
+    TWI_buffer_out[3] = (~(0xc0) & dectobcd(time.hours));
+
+    /* write (UTC) time to chip */
+    TWI_master_start_write(DS3231_ADDR, 4);
+    
+    while(TWI_busy){};
+    return;
+}
+
+/* Set ds3231 date */
+void ds3231_set_date(gps_rmc_date_t date) {
+    while(TWI_busy){};
+
+    /* word address for time set start */
+    TWI_buffer_out[0] = 0x04;
+    /* Day code 1-7 = Sunday - Saturday */
+    // todo: add me?
+    //TWI_buffer_out[1] = (0x07 & 0x01);
+    TWI_buffer_out[2] = (0x3f & dectobcd(date.day));
+    TWI_buffer_out[3] = (0x1f & dectobcd(date.month));
+    TWI_buffer_out[4] = (dectobcd(date.year));
+
+    /* write (UTC) date to chip */
+    TWI_master_start_write(DS3231_ADDR, 4);
+
+    while(TWI_busy){};
+    return;
+}    
+
 
 // uint8_t ds3231_get_datetime() {
 
 // }
 
+/* Get ds3231 time as digits */
 uint8_t ds3231_get_time_digits(nixie_time_digits_t *nix_digits) {
     uint8_t time_reg_array[DS3231_TIME_NREG];
     
@@ -181,30 +224,22 @@ float ds3231_convert_temp(uint8_t msb, uint8_t lsb) {
 
 /* Retrieve temperature from DS3231 and return as a float */
 float ds3231_get_temp(void) {
-    //float temp = 0.0;
     uint8_t t_msb;
     uint8_t t_lsb;
+
     while(TWI_busy) {};
     TWI_buffer_out[0] = 0x11;
     TWI_master_start_write_then_read(DS3231_ADDR, 1, 2);
     while(TWI_busy) {};
+
     t_msb = TWI_buffer_in[0];
     t_lsb = TWI_buffer_in[1];
-    /* the LSB of temp is stored at the MSB of the word for unknown
-       reasons */
-    //t_lsb = (t_lsb >> 6);
-
-    //temp = (float)t_msb + (float)t_lsb/4.0;
-
-    //return temp;
     return(ds3231_convert_temp(t_msb, t_lsb));
 }
         
 /* blink LED on square wave stuff (for now) 
    Eventually this will be one of the 1 PPS timing interrupts */
 ISR(INT6_vect) {
-    //pps = 1;
-    //PORTD ^= (1 << PD6);
     increment_time();
     if (led) {
         PORTD &= ~(1 << PD6);

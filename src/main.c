@@ -19,6 +19,7 @@
 #define GPS_FIX_NEW 1
 #define GPS_FIX_STABLE 2
 #define GPS_FIX_NONE 3
+#define GPS_FIX_CHECK_TIME 4
 
 static inline uint8_t tmod(uint8_t a);
 
@@ -83,7 +84,6 @@ int main(void) {
     //float t = 0.0;
     //uint8_t memwad[19];
     uint8_t e_stat = 0;
-    uint8_t uart_byte = 0x00;
     uint8_t gps_fix_state = 0;
     uint8_t mode = 0;
 
@@ -101,8 +101,8 @@ int main(void) {
     /* enable interrupts */
     sei();
 
-    pgtop = 0;
-    gprmc = 0;
+    //pgtop = 0;
+    //gprmc = 0;
 
     /* Wait for a valid GPS packet before initializing it (boot
        time) */
@@ -116,7 +116,10 @@ int main(void) {
     /* Initialize MTK3339 GPS unit */
     mtk3339_init();
 
+    /* Start by assuming no GPS fix */
     gps_fix_state = 0;
+    /* default mode ds3231 */
+    PORTC |= (1 << PC6);
 
     /* make the magic happen */
     for (;;) {
@@ -128,13 +131,6 @@ int main(void) {
                 seconds_cnt = 0;
                 /* 3D Fix on */
                 PORTC |= (1 << PC4);
-
-                /* Enable GPS pps line */
-                // ds3231_disable_int();
-                // the_time.hours = tmod(gps_time.hours - 6);
-                // the_time.minutes = gps_time.minutes;
-                // the_time.seconds = gps_time.seconds;
-                // mtk3339_enable_int();
             } else {
                 /* Enable ds3231 pps line */
                 mode = GPS_FIX_NONE;
@@ -142,7 +138,9 @@ int main(void) {
                 ds3231_enable_int();
                 /* 3D Fix off */
                 PORTC &= ~(1 << PC4);
-
+                /* GPS mode off/ ds3231 mode on */
+                PORTC &= ~(1 << PC5);
+                PORTC |= (1 << PC6);
             }
         }
 
@@ -156,12 +154,30 @@ int main(void) {
                 the_time.minutes = gps_time.minutes;
                 the_time.seconds = gps_time.seconds;
                 /* Set ds3231 date/time */
+                ds3231_set_time(gps_time);
+                ds3231_set_date(gps_date);
                 mtk3339_enable_int();
+                PORTC &= ~(1 << PC6);
+                PORTC |= (1 << PC5);
             }
             break;
         case GPS_FIX_STABLE:
+            if (seconds_cnt > 254) {
+                mode = GPS_FIX_CHECK_TIME;
+            }
             break;
         case GPS_FIX_NONE:
+            break;
+        case GPS_FIX_CHECK_TIME:
+            if ((the_time.seconds != gps_time.seconds) |
+                (the_time.minutes != gps_time.minutes) |
+                (the_time.hours != tmod(gps_time.hours - 6))) {
+                /* Set time */
+                the_time.hours = tmod(gps_time.hours - 6);
+                the_time.minutes = gps_time.minutes;
+                the_time.seconds = gps_time.seconds;
+            }
+            mode = GPS_FIX_STABLE;
             break;
         }
 
@@ -229,6 +245,9 @@ int main(void) {
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(pmtk_ack, sbuf, 10));
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
                         memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, itoa(seconds_cnt, sbuf, 10));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
+                        memset(sbuf, 0x00, sizeof(sbuf));
                     }
                 } else if ((char)my_byte == 'u') {
                     uart_disable();
@@ -256,13 +275,6 @@ int main(void) {
                     sw = 1;
                 }
 
-                /* Temporary GPS echo from uart -> usb */
-                // if (UCSR1A & (1 << RXC1)) {
-                //     while (UCSR1A & (1 << RXC1)) {
-                //         uart_byte = uart_receive();
-                //         cdc_dev_status = CDC_Device_SendByte(&VirtualSerial_CDC_Interface, uart_byte);
-                //     }
-                // }
             }
         }
         
@@ -290,9 +302,9 @@ void setup_hardware(void) {
     clock_prescale_set(clock_div_1);
 
     /* LED0 to output */
-    DDRC |= (1 << PC4);
+    DDRC |= (1 << PC4) | (1 << PC5) | (1 << PC6);
     /* LED off! */
-    PORTC &= ~(1 << PC4);
+    PORTC &= ~((1 << PC4) | (1 << PC5) | (1 << PC6));
 
     /* INT6 setup for external rising edge */
     ds3231_hw_init();
