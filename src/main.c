@@ -15,17 +15,31 @@
 #include "uart.h"
 #include "mtk3339.h"
 #include "nmea.h"
+#include "spi.h"
 
 #define GPS_FIX_NEW 1
 #define GPS_FIX_STABLE 2
 #define GPS_FIX_NONE 3
 #define GPS_FIX_CHECK_TIME 4
 
-static inline uint8_t tmod(uint8_t a);
+#define SEC_OS 0
+#define TENS_SEC_OS 10
+#define MIN_OS 20
+#define TENS_MIN_OS 32
+#define HR_OS 42
+#define TENS_HR_OS 52
+
+static inline uint8_t tmod(uint8_t);
+static inline uint8_t dectobcd(uint8_t);
+static inline void time_to_nix_digits(nixie_time_t, nixie_time_digits_t *);
+static inline void nixie_time_to_nixie_digits(nixie_time_digits_t, uint8_t *);
 
 /* usb data transmit ready status */
 volatile bool dtr_status;
 volatile uint8_t seconds_cnt = 0;
+/* seconds -> hours from indices 0->8 */
+volatile uint8_t nixie_digits[8];
+
 nixie_time_t the_time = {.seconds = 0, 
                          .minutes = 0, 
                          .hours = 0}; 
@@ -87,12 +101,17 @@ int main(void) {
     uint8_t gps_fix_state = 0;
     uint8_t mode = 0;
 
+    /* Let ISP verification work? */
+    _delay_ms(5);
+
     /* Initialize at90usb1287 peripherals */
     setup_hardware();
 
     /* Create a regular character stream for the interface so that it
        can be used with the stdio.h functions */
     //CDC_Device_CreateStream(&VirtualSerial_CDC_Interface, &USBSerialStream);
+
+    memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
 
     the_time.hours = 0;
     the_time.minutes = 0;
@@ -209,7 +228,7 @@ int main(void) {
                     my_byte = 0x00;
                 } else if ((char)my_byte == 'g') {
                     if (dtr_status) {
-                        sprintf(sbuf, "%i:%i:%i\n", the_time.hours, the_time.minutes, the_time.seconds);
+                        sprintf(sbuf, "%02i:%02i:%02i\n", the_time.hours, the_time.minutes, the_time.seconds);
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
                         memset(sbuf, 0x00, sizeof(sbuf));
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "GPS FIX: ");
@@ -220,7 +239,7 @@ int main(void) {
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, gps_time_s);
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
 
-                        sprintf(sbuf, "%i-%i-%i\n", gps_date.year, gps_date.month, gps_date.day);
+                        sprintf(sbuf, "%02i-%02i-%02i\n", gps_date.year, gps_date.month, gps_date.day);
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
                         memset(sbuf, 0x00, sizeof(sbuf));
                     }
@@ -278,7 +297,16 @@ int main(void) {
             }
         }
         
-       
+        // /* Some test stuff for HV5522 current */
+        // /* blast some data to HV5522s */
+        // for (j = 0; j < 8; j++) {
+        //     spi_master_tx(0x00);
+        // }
+        // /* Latch! */
+        // PORTC |= (1 << PC0);
+        // _delay_us(1);
+        // PORTC &= ~(1 << PC0);
+
         uart_task();
         CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
         USB_USBTask();
@@ -309,6 +337,13 @@ void setup_hardware(void) {
     /* INT6 setup for external rising edge */
     ds3231_hw_init();
 
+    /* init spi (for HV5522s) */
+    spi_init();
+    /* Set HV5522 blanking off */
+    PORTC |= (1 << PC1);
+    /* Set Latch Enable off */
+    PORTC &= ~(1 << PC0);
+
     /* init TWI */
     TWI_init();
 
@@ -324,6 +359,7 @@ void setup_hardware(void) {
 
 /* Call to increment by one second */
 void increment_time(void) {
+    uint8_t j = 0;
     seconds_cnt++;
     the_time.seconds++;
     if (the_time.seconds > 59) {
@@ -339,7 +375,22 @@ void increment_time(void) {
     if (the_time.hours > 23) {
         the_time.hours = 0;
     }
-}    
+
+    time_to_nix_digits(the_time, &nixie_time);
+    memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
+    //memset(nixie_digits, 0x00, 8);
+    nixie_time_to_nixie_digits(nixie_time, nixie_digits);
+    /* Some test stuff for HV5522 current */
+    /* blast some data to HV5522s */
+    for (j = sizeof(nixie_digits); j-- > 0; ) {
+        //spi_master_tx(0x00);
+        spi_master_tx(nixie_digits[j]);
+    }
+    /* Latch! */
+    PORTC |= (1 << PC0);
+    _delay_us(1);
+    PORTC &= ~(1 << PC0);
+}
 
 /* Function to make sure any hour of day subtraction comes out between
    0 and 23 */
@@ -350,6 +401,41 @@ static inline uint8_t tmod(uint8_t t) {
     } 
     
     return t;
+}
+
+/* decimal to binary coded decimal helper */
+static inline uint8_t dectobcd(uint8_t k) {
+    return((k/10)*16 + (k%10));
+}
+
+static inline void time_to_nix_digits(nixie_time_t t, nixie_time_digits_t *td) {
+    uint8_t p = 0;
+    p = dectobcd(t.seconds);
+    td->seconds = (p & 0x0f);
+    td->tens_seconds = ((p >> 4) & 0x0f);
+    p = dectobcd(t.minutes);
+    td->minutes = (p & 0x0f);
+    td->tens_minutes = ((p >> 4) & 0x0f);
+    p = dectobcd(t.hours);
+    td->hours = (p & 0x0f);
+    td->tens_hours = ((p >> 4) & 0x0f);
+}
+    
+static inline void nixie_time_to_nixie_digits(nixie_time_digits_t t, uint8_t *nd) {
+    memset(nd, 0x00, 8);
+    uint8_t n = 0;
+    n = SEC_OS + t.seconds;
+    nd[n/8] = (1 << n%8);
+    n = TENS_SEC_OS + t.tens_seconds;
+    nd[n/8] |= (1 << n%8);
+    n = MIN_OS + t.minutes;
+    nd[n/8] |= (1 << n%8);
+    n = TENS_MIN_OS + t.tens_minutes;
+    nd[n/8] |= (1 << n%8);
+    n = HR_OS + t.hours;
+    nd[n/8] |= (1 << n%8);
+    n = TENS_HR_OS + t.tens_hours;
+    nd[n/8] |= (1 << n%8);
 }
 
 /* Event handler for the library USB Connection event. */
