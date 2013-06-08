@@ -108,9 +108,9 @@ void ds3231_set_date(gps_rmc_date_t date) {
     /* Day code 1-7 = Sunday - Saturday */
     // todo: add me?
     //TWI_buffer_out[1] = (0x07 & 0x01);
-    TWI_buffer_out[2] = (0x3f & dectobcd(date.day));
-    TWI_buffer_out[3] = (0x1f & dectobcd(date.month));
-    TWI_buffer_out[4] = (dectobcd(date.year));
+    TWI_buffer_out[1] = (0x3f & dectobcd(date.day));
+    TWI_buffer_out[2] = (0x1f & dectobcd(date.month));
+    TWI_buffer_out[3] = (dectobcd(date.year));
 
     /* write (UTC) date to chip */
     TWI_master_start_write(DS3231_ADDR, 4);
