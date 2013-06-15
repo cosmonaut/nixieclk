@@ -33,7 +33,8 @@ void mtk3339_disable_int(void) {
 
 void mtk3339_init(void) {
     /* RMC only output for now */
-    mtk3339_send_command(PMTK_SET_NMEA_OUTPUT_RMC, 1);
+    //mtk3339_send_command(PMTK_SET_NMEA_OUTPUT_RMC, 1);
+    mtk3339_send_command(PMTK_SET_NMEA_OUTPUT_RMC_GSA, 1);
 
     /* Set higher baud rate so that we can get more packets per
        second. Ignore ack! */

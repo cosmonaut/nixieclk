@@ -238,9 +238,13 @@ int main(void) {
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, gps_time_s);
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
-
                         sprintf(sbuf, "%02i-%02i-%02i\n", gps_date.year, gps_date.month, gps_date.day);
                         cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                        memset(sbuf, 0x00, sizeof(sbuf));
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "GSA packets: ");
+                        itoa(gpgsa, sbuf, 10);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                        cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, "\n");
                         memset(sbuf, 0x00, sizeof(sbuf));
                     }
                 } else if ((char)my_byte == 'r') {
@@ -378,15 +382,13 @@ void increment_time(void) {
 
     time_to_nix_digits(the_time, &nixie_time);
     memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
-    //memset(nixie_digits, 0x00, 8);
     nixie_time_to_nixie_digits(nixie_time, nixie_digits);
-    /* Some test stuff for HV5522 current */
-    /* blast some data to HV5522s */
+    /* blast some data to HV5522s (reverse order, 10s hours first,
+       seconds last */
     for (j = sizeof(nixie_digits); j-- > 0; ) {
-        //spi_master_tx(0x00);
         spi_master_tx(nixie_digits[j]);
     }
-    /* Latch! */
+    /* Latch the data */
     PORTC |= (1 << PC0);
     _delay_us(1);
     PORTC &= ~(1 << PC0);

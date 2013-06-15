@@ -24,6 +24,7 @@ uint8_t pmtk_ack;
 uint8_t pmtk_nack;
 uint8_t npackets;
 uint8_t gprmc;
+uint8_t gpgsa;
 uint8_t gps_fix;
 gps_rmc_time_t gps_time;
 gps_rmc_date_t gps_date;

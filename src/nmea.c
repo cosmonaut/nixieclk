@@ -17,6 +17,8 @@ uint8_t packet_flag = 0;
 
 void nmea_flush(void) {
     pgtop = 0;
+    gprmc = 0;
+    gpgsa = 0;
     npackets = 0;
     pmtk_ack = 0;
     pmtk_nack = 0;
@@ -84,7 +86,21 @@ void nmea_parse(void) {
         /* parse packet... */
         if (strncmp((char*)packet_buf, "$PGTOP", 6) == 0) {
             pgtop++;
-            /* add external anenna flag later */
+            /* add external antenna flag later */
+        } else if (strncmp((char*)packet_buf, "$GPGSA", 6) == 0) { 
+            i = 5;
+            while(packet_buf[i++] != ',');
+            /* Mode */
+
+            while(packet_buf[i++] != ',');
+            /* Fix status -- PPS line only runs on 3D fix */
+            if ((char)packet_buf[i] == '3') {
+                gps_fix = 1;
+            } else {
+                gps_fix = 0;
+            }
+            
+            gpgsa++;
         } else if (strncmp((char*)packet_buf, "$GPRMC", 6) == 0) {
             i = 5;
             while(packet_buf[i++] != ',');
@@ -93,7 +109,7 @@ void nmea_parse(void) {
             while(packet_buf[i++] != ',');
             /* packet valid/invalid */
             if ((char)packet_buf[i] == 'A') {
-                gps_fix = 1;
+                //gps_fix = 1;
                 if ((i - utc_place) == (UTC_ENTRY_LEN + 1)) {
                     gps_time.hours = (packet_buf[utc_place] - '0')*10 + (packet_buf[utc_place + 1] - '0');
                     gps_time.minutes = (packet_buf[utc_place + 2] - '0')*10 + (packet_buf[utc_place + 3] - '0');
@@ -125,7 +141,7 @@ void nmea_parse(void) {
                     gps_date.year = (packet_buf[i + 4] - '0')*10 + (packet_buf[i + 5] - '0');
                 }
             } else {
-                gps_fix = 0;
+                //gps_fix = 0;
             }
             gprmc++;
         } else if (strncmp((char*)packet_buf, "$PMTK001", 8) == 0) {
