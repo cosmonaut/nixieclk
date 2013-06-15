@@ -32,7 +32,7 @@
 static inline uint8_t tmod(uint8_t);
 static inline uint8_t dectobcd(uint8_t);
 static inline void time_to_nix_digits(nixie_time_t, nixie_time_digits_t *);
-static inline void nixie_time_to_nixie_digits(nixie_time_digits_t, uint8_t *);
+static inline void nixie_time_to_nixie_digits(nixie_time_digits_t, volatile uint8_t *);
 
 /* usb data transmit ready status */
 volatile bool dtr_status;
@@ -91,7 +91,7 @@ int main(void) {
     uint8_t my_byte = 0;
     uint16_t rx_num_bytes = 0;
     uint16_t i = 0;
-    uint16_t j = 0;
+    //uint16_t j = 0;
     uint8_t sw = 0;
     uint8_t cdc_dev_status = 0;
     char sbuf[255];
@@ -420,22 +420,25 @@ static inline void time_to_nix_digits(nixie_time_t t, nixie_time_digits_t *td) {
     td->hours = (p & 0x0f);
     td->tens_hours = ((p >> 4) & 0x0f);
 }
-    
-static inline void nixie_time_to_nixie_digits(nixie_time_digits_t t, uint8_t *nd) {
-    memset(nd, 0x00, 8);
-    uint8_t n = 0;
-    n = SEC_OS + t.seconds;
-    nd[n/8] = (1 << n%8);
-    n = TENS_SEC_OS + t.tens_seconds;
-    nd[n/8] |= (1 << n%8);
-    n = MIN_OS + t.minutes;
-    nd[n/8] |= (1 << n%8);
-    n = TENS_MIN_OS + t.tens_minutes;
-    nd[n/8] |= (1 << n%8);
-    n = HR_OS + t.hours;
-    nd[n/8] |= (1 << n%8);
-    n = TENS_HR_OS + t.tens_hours;
-    nd[n/8] |= (1 << n%8);
+
+/* nd should be an array of bytes of at least size 8 */    
+static inline void nixie_time_to_nixie_digits(nixie_time_digits_t t, volatile uint8_t *nd) {
+    if (nd != 0) {
+        memset((void *)nd, 0x00, 8);
+        uint8_t n = 0;
+        n = SEC_OS + t.seconds;
+        nd[n/8] = (1 << n%8);
+        n = TENS_SEC_OS + t.tens_seconds;
+        nd[n/8] |= (1 << n%8);
+        n = MIN_OS + t.minutes;
+        nd[n/8] |= (1 << n%8);
+        n = TENS_MIN_OS + t.tens_minutes;
+        nd[n/8] |= (1 << n%8);
+        n = HR_OS + t.hours;
+        nd[n/8] |= (1 << n%8);
+        n = TENS_HR_OS + t.tens_hours;
+        nd[n/8] |= (1 << n%8);
+    }
 }
 
 /* Event handler for the library USB Connection event. */
