@@ -22,6 +22,10 @@
 #define GPS_FIX_NONE 3
 #define GPS_FIX_CHECK_TIME 4
 
+#define NIXIE_TIME_MODE 0
+#define NIXIE_WAVE_MODE 1
+#define NIXIE_SET_MODE 2
+
 #define SEC_OS 0
 #define TENS_SEC_OS 10
 #define MIN_OS 20
@@ -39,6 +43,7 @@ volatile bool dtr_status;
 volatile uint8_t seconds_cnt = 0;
 /* seconds -> hours from indices 0->8 */
 volatile uint8_t nixie_digits[8];
+volatile uint8_t nixie_mode = 0;
 
 nixie_time_t the_time = {.seconds = 0, 
                          .minutes = 0, 
@@ -49,6 +54,10 @@ nixie_time_digits_t nixie_time = {.seconds = 0,
                                   .tens_minutes = 0, 
                                   .hours = 0, 
                                   .tens_hours = 0}; 
+
+/* Sequence of digits that loop through every digit in the tube in
+   height order and back */
+volatile const uint8_t dig_loop[18] = {1, 0, 2, 6, 9, 5, 7, 8, 4, 3, 4, 8, 7, 5, 9, 6, 2, 0};
 
 /* LUFA CDC Class driver interface configuration and state
  * information. This structure is passed to all CDC Class driver
@@ -91,7 +100,7 @@ int main(void) {
     uint8_t my_byte = 0;
     uint16_t rx_num_bytes = 0;
     uint16_t i = 0;
-    //uint16_t j = 0;
+    uint16_t j = 0;
     uint8_t sw = 0;
     uint8_t cdc_dev_status = 0;
     char sbuf[255];
@@ -100,6 +109,8 @@ int main(void) {
     uint8_t e_stat = 0;
     uint8_t gps_fix_state = 0;
     uint8_t mode = 0;
+    uint16_t k = 0;
+    uint8_t p = 0;
 
     /* Let ISP verification work? */
     _delay_ms(5);
@@ -200,6 +211,35 @@ int main(void) {
             break;
         }
 
+        //while(1) {
+        if (nixie_mode == NIXIE_WAVE_MODE) {
+            memset((void *)nixie_digits, 0x00, 8);
+            p = SEC_OS + dig_loop[k%18];
+            nixie_digits[p/8] = (1 << p%8);
+            p = TENS_SEC_OS + dig_loop[(k + 1)%18];
+            nixie_digits[p/8] |= (1 << p%8);
+            p = MIN_OS + dig_loop[(k + 2)%18];
+            nixie_digits[p/8] |= (1 << p%8);
+            p = TENS_MIN_OS + dig_loop[(k + 3)%18];
+            nixie_digits[p/8] |= (1 << p%8);
+            p = HR_OS + dig_loop[(k + 4)%18];
+            nixie_digits[p/8] |= (1 << p%8);
+            p = TENS_HR_OS + dig_loop[(k + 5)%18];
+            nixie_digits[p/8] |= (1 << p%8);
+            k++;
+
+            for (j = sizeof(nixie_digits); j-- > 0; ) {
+                spi_master_tx(nixie_digits[j]);
+            }
+            /* Latch the data */
+            PORTC |= (1 << PC0);
+            _delay_us(1);
+            PORTC &= ~(1 << PC0);
+            
+            _delay_ms(50);
+        }
+
+
         /* USB rx commands */
         if (USB_DeviceState == DEVICE_STATE_Configured) {
             /* Must throw away unused bytes from the host, or it will lock
@@ -273,14 +313,15 @@ int main(void) {
                         memset(sbuf, 0x00, sizeof(sbuf));
                     }
                 } else if ((char)my_byte == 'u') {
-                    uart_disable();
-                    uart_flush_buffer();
-                    nmea_flush();
-                    uart_init(57600);
-
+                    // uart_disable();
+                    // uart_flush_buffer();
+                    // nmea_flush();
+                    // uart_init(57600);
+                } else if ((char)my_byte == 'i') {
+                    nixie_mode = NIXIE_WAVE_MODE;
+                } else if ((char)my_byte == 'o') {
+                    nixie_mode = NIXIE_TIME_MODE;
                 }
-
-
 
             }
             
@@ -383,15 +424,19 @@ void increment_time(void) {
     time_to_nix_digits(the_time, &nixie_time);
     memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
     nixie_time_to_nixie_digits(nixie_time, nixie_digits);
-    /* blast some data to HV5522s (reverse order, 10s hours first,
-       seconds last */
-    for (j = sizeof(nixie_digits); j-- > 0; ) {
-        spi_master_tx(nixie_digits[j]);
+
+    /* Display on tubes if we're in time mode */
+    if (nixie_mode == NIXIE_TIME_MODE) {
+        /* blast some data to HV5522s (reverse order, 10s hours first,
+           seconds last */
+        for (j = sizeof(nixie_digits); j-- > 0; ) {
+            spi_master_tx(nixie_digits[j]);
+        }
+        /* Latch the data */
+        PORTC |= (1 << PC0);
+        _delay_us(1);
+        PORTC &= ~(1 << PC0);
     }
-    /* Latch the data */
-    PORTC |= (1 << PC0);
-    _delay_us(1);
-    PORTC &= ~(1 << PC0);
 }
 
 /* Function to make sure any hour of day subtraction comes out between

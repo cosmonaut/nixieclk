@@ -1,9 +1,20 @@
 Author: Nicholas Nell
 Email: nicholas.nell@colorado.edu
 
-Updated: 03-21-2013
+Updated: 11-02-2013
 
 This bundle contains PCB designs and firmware for a 6-tube Nixie clock
 that has the ability to be clocked from 3 separate sources (32 kHz
 crystal, TCXO RTC, GPS). 
+
+Issues:
+
+Version 1 of the circuit should have the CRST trace cut so that it
+does not reach the GPS reset pin. I haven't tried the circuit without
+the cut but different pull-up voltage may cause problems.
+
+Version 1 of the circuit has an issue with the 32 kHz clock. It
+appears to require a currently undetermined small capacitance in order
+to oscillate at 32 kHz. This goes against what the Atmel AVR RTC
+application note and the datasheet for the at90usb1287 seem to say. 
 
