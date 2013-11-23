@@ -182,7 +182,7 @@ int main(void) {
             if (seconds_cnt > 9) {
                 mode = GPS_FIX_STABLE;
                 ds3231_disable_int();
-                the_time.hours = tmod(gps_time.hours - 6);
+                the_time.hours = tmod(gps_time.hours - 7);
                 the_time.minutes = gps_time.minutes;
                 the_time.seconds = gps_time.seconds;
                 /* Set ds3231 date/time */
@@ -203,9 +203,9 @@ int main(void) {
         case GPS_FIX_CHECK_TIME:
             if ((the_time.seconds != gps_time.seconds) |
                 (the_time.minutes != gps_time.minutes) |
-                (the_time.hours != tmod(gps_time.hours - 6))) {
+                (the_time.hours != tmod(gps_time.hours - 7))) {
                 /* Set time */
-                the_time.hours = tmod(gps_time.hours - 6);
+                the_time.hours = tmod(gps_time.hours - 7);
                 the_time.minutes = gps_time.minutes;
                 the_time.seconds = gps_time.seconds;
             }
