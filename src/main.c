@@ -113,7 +113,7 @@ int main(void) {
     uint8_t p = 0;
 
     /* Let ISP verification work? */
-    _delay_ms(5);
+    //_delay_ms(5);
 
     /* Initialize at90usb1287 peripherals */
     setup_hardware();
@@ -138,6 +138,8 @@ int main(void) {
        time) */
     while(pgtop < 1) {
         uart_task();
+        CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
+        USB_USBTask();
     }
 
     /* Initialize the DS3231 RTC */
@@ -362,9 +364,22 @@ int main(void) {
 /* Configures the board hardware and chip peripherals for the demo's
    functionality. */
 void setup_hardware(void) {
+    uint8_t i = 0;
+
+    /* For initializing tube display */
+    memset((void *)nixie_digits, 0x00, 8);
+
+
     /* Disable watchdog if enabled by bootloader/fuses */
     MCUSR &= ~(1 << WDRF);
     wdt_disable();
+
+    USB_Init();
+
+    DDRC |= (1 << PC0) | (1 << PC1);
+    /* Set HV5522 blanking on */
+    PORTC &= ~(1 << PC1);
+    PORTC &= ~(1 << PC0);
 
     /* SMD LED to output */
     DDRD = (1 << PD6);
@@ -384,6 +399,17 @@ void setup_hardware(void) {
 
     /* init spi (for HV5522s) */
     spi_init();
+
+    /* Set all filaments off */
+    for (i = sizeof(nixie_digits); i-- > 0; ) {
+        spi_master_tx(nixie_digits[i]);
+    }
+    /* Latch the data */
+    PORTC |= (1 << PC0);
+    _delay_us(1);
+    PORTC &= ~(1 << PC0);
+
+
     /* Set HV5522 blanking off */
     PORTC |= (1 << PC1);
     /* Set Latch Enable off */
@@ -397,9 +423,6 @@ void setup_hardware(void) {
     uart_init(MTK3339_DEFAULT_BAUD);
 
     mtk3339_hw_init();
-
-    /* Hardware Initialization */
-    USB_Init();
 }
 
 /* Call to increment by one second */
