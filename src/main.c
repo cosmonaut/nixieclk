@@ -17,11 +17,14 @@
 #include "nmea.h"
 #include "spi.h"
 
+/* Clock operation modes */
 #define GPS_FIX_NEW 1
 #define GPS_FIX_STABLE 2
 #define GPS_FIX_NONE 3
 #define GPS_FIX_CHECK_TIME 4
+#define MAN_SET_TIME 5
 
+/* Tube display modes */
 #define NIXIE_TIME_MODE 0
 #define NIXIE_WAVE_MODE 1
 #define NIXIE_SET_MODE 2
@@ -33,10 +36,19 @@
 #define HR_OS 42
 #define TENS_HR_OS 52
 
+/* Switch positions */
+#define SW_TSET 0x01
+#define SW_NEXT 0x02
+#define SW_TUP 0x04
+#define SW_TDOWN 0x08
+#define SW_SHDN 0x10
+
 static inline uint8_t tmod(uint8_t);
 static inline uint8_t dectobcd(uint8_t);
 static inline void time_to_nix_digits(nixie_time_t, nixie_time_digits_t *);
 static inline void nixie_time_to_nixie_digits(nixie_time_digits_t, volatile uint8_t *);
+static inline void blank_digit(uint8_t, volatile uint8_t *);
+static void set_system_time(nixie_time_digits_t);
 
 /* usb data transmit ready status */
 volatile bool dtr_status;
@@ -44,6 +56,13 @@ volatile uint8_t seconds_cnt = 0;
 /* seconds -> hours from indices 0->8 */
 volatile uint8_t nixie_digits[8];
 volatile uint8_t nixie_mode = 0;
+volatile uint8_t mode = 0;
+/* switch time set items */
+volatile uint8_t pa = 0x1f;
+volatile uint8_t test = 0x00;
+volatile uint8_t pa_store = 0x1f;
+volatile uint8_t hv = 0x00;
+volatile uint8_t set_digit = 5;
 
 nixie_time_t the_time = {.seconds = 0, 
                          .minutes = 0, 
@@ -55,9 +74,34 @@ nixie_time_digits_t nixie_time = {.seconds = 0,
                                   .hours = 0, 
                                   .tens_hours = 0}; 
 
+nixie_time_digits_t time_setting = {.seconds = 0, 
+                                    .tens_seconds = 0, 
+                                    .minutes = 0, 
+                                    .tens_minutes = 0, 
+                                    .hours = 0, 
+                                    .tens_hours = 0}; 
+
 /* Sequence of digits that loop through every digit in the tube in
    height order and back */
 volatile const uint8_t dig_loop[18] = {1, 0, 2, 6, 9, 5, 7, 8, 4, 3, 4, 8, 7, 5, 9, 6, 2, 0};
+
+/* Hamming Weight Lookup Table for one byte */
+static volatile uint8_t pcnt_lktb[256] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 
+    3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 
+    3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 
+    5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 
+    3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 
+    4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 
+    5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 
+    4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 
+    3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 
+    5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 
+    4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 
+    6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 
+    5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
+};
+
 
 /* LUFA CDC Class driver interface configuration and state
  * information. This structure is passed to all CDC Class driver
@@ -108,9 +152,12 @@ int main(void) {
     //uint8_t memwad[19];
     uint8_t e_stat = 0;
     uint8_t gps_fix_state = 0;
-    uint8_t mode = 0;
+
     uint16_t k = 0;
     uint8_t p = 0;
+
+    uint8_t sw_cnt = 0;
+    uint8_t blink_sw = 0;
 
     /* Let ISP verification work? */
     //_delay_ms(5);
@@ -149,6 +196,7 @@ int main(void) {
     mtk3339_init();
 
     /* Start by assuming no GPS fix */
+    mode = GPS_FIX_NONE;
     gps_fix_state = 0;
     /* default mode ds3231 */
     PORTC |= (1 << PC6);
@@ -186,7 +234,7 @@ int main(void) {
                 the_time.minutes = gps_time.minutes;
                 the_time.seconds = gps_time.seconds;
                 /* Set ds3231 date/time */
-                ds3231_set_time(gps_time);
+                ds3231_set_time_gps(gps_time);
                 ds3231_set_date(gps_date);
                 mtk3339_enable_int();
                 PORTC &= ~(1 << PC6);
@@ -211,7 +259,13 @@ int main(void) {
             }
             mode = GPS_FIX_STABLE;
             break;
+        case MAN_SET_TIME:
+            ds3231_disable_int();
+            set_system_time(time_setting);
+            ds3231_enable_int();
+            mode = GPS_FIX_NONE;
         }
+        
 
         //while(1) {
         if (nixie_mode == NIXIE_WAVE_MODE) {
@@ -241,6 +295,28 @@ int main(void) {
             _delay_ms(50);
         }
 
+        if (nixie_mode == NIXIE_SET_MODE) {
+            memset((void *)nixie_digits, 0x00, 8);
+            nixie_time_to_nixie_digits(time_setting, nixie_digits);
+            if (blink_sw) {
+                blank_digit(set_digit, nixie_digits);
+            }
+            for (j = sizeof(nixie_digits); j-- > 0; ) {
+                spi_master_tx(nixie_digits[j]);
+            }
+            /* Latch the data */
+            PORTC |= (1 << PC0);
+            _delay_us(1);
+            PORTC &= ~(1 << PC0);
+
+            sw_cnt++;
+            if (sw_cnt > 49) {
+                sw_cnt = 0;
+                blink_sw ^= 0x01;
+            }
+
+            _delay_ms(10);
+        }
 
         /* USB rx commands */
         if (USB_DeviceState == DEVICE_STATE_Configured) {
@@ -315,6 +391,7 @@ int main(void) {
                         memset(sbuf, 0x00, sizeof(sbuf));
                     }
                 } else if ((char)my_byte == 'u') {
+                    /* mtk3339 debug stuff.. */
                     // uart_disable();
                     // uart_flush_buffer();
                     // nmea_flush();
@@ -323,6 +400,17 @@ int main(void) {
                     nixie_mode = NIXIE_WAVE_MODE;
                 } else if ((char)my_byte == 'o') {
                     nixie_mode = NIXIE_TIME_MODE;
+                } else if ((char)my_byte == 'k') {
+                    /* debug for switches */
+                    sprintf(sbuf, "PA: %02x\n", pa);
+                    cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                    memset(sbuf, 0x00, sizeof(sbuf));
+                    sprintf(sbuf, "test: %02x\n", test);
+                    cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                    memset(sbuf, 0x00, sizeof(sbuf));
+                    sprintf(sbuf, "HV: %02x\n", hv);
+                    cdc_dev_status = CDC_Device_SendString(&VirtualSerial_CDC_Interface, sbuf);
+                    memset(sbuf, 0x00, sizeof(sbuf));
                 }
 
             }
@@ -390,9 +478,9 @@ void setup_hardware(void) {
     clock_prescale_set(clock_div_1);
 
     /* LED0 to output */
-    DDRC |= (1 << PC4) | (1 << PC5) | (1 << PC6);
+    DDRC |= (1 << PC4) | (1 << PC5) | (1 << PC6) | (1 << PC7);
     /* LED off! */
-    PORTC &= ~((1 << PC4) | (1 << PC5) | (1 << PC6));
+    PORTC &= ~((1 << PC4) | (1 << PC5) | (1 << PC6) | (1 << PC7));
 
     /* INT6 setup for external rising edge */
     ds3231_hw_init();
@@ -423,6 +511,24 @@ void setup_hardware(void) {
     uart_init(MTK3339_DEFAULT_BAUD);
 
     mtk3339_hw_init();
+
+    /* MAX6818 stuff */
+    DDRC |= (1 << PC2);
+
+    PORTC |= (1 << PC2);
+    _delay_us(1);
+    PORTC &= ~(1 << PC2);
+    _delay_us(1);
+    PORTC |= (1 << PC2);
+
+    /* Set port A as input */
+    DDRA = 0x00;
+    /* Set pcint5 as input */
+    DDRB &= ~(1 << PB5);
+
+    PCICR |= (1 << PCIE0);
+    /* Only using max6818 interrupt for now */
+    PCMSK0 |= (1 << PCINT5);
 }
 
 /* Call to increment by one second */
@@ -445,6 +551,7 @@ void increment_time(void) {
     }
 
     time_to_nix_digits(the_time, &nixie_time);
+    /* Insert next two lines into display only code */
     memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
     nixie_time_to_nixie_digits(nixie_time, nixie_digits);
 
@@ -459,6 +566,16 @@ void increment_time(void) {
         PORTC |= (1 << PC0);
         _delay_us(1);
         PORTC &= ~(1 << PC0);
+    }
+}
+
+static void set_system_time(nixie_time_digits_t t) {
+    if ((mode != GPS_FIX_STABLE) && (mode != GPS_FIX_CHECK_TIME)) {
+        the_time.seconds = t.tens_seconds*10 + t.seconds;
+        the_time.minutes = t.tens_minutes*10 + t.minutes;
+        the_time.hours = t.tens_hours*10 + t.hours;
+        
+        ds3231_set_time(the_time);
     }
 }
 
@@ -511,6 +628,39 @@ static inline void nixie_time_to_nixie_digits(nixie_time_digits_t t, volatile ui
     }
 }
 
+/* nd must be an array of bytes of at least size 8 */
+static inline void blank_digit(uint8_t dig, volatile uint8_t *nd) {
+    switch (dig) {
+    case 0:
+        nd[0] = 0x00;
+        nd[1] &= ~(0x03);
+        break;
+    case 1:
+        nd[1] &= ~(0xfc);
+        nd[2] &= ~(0x0f);
+        break;
+    case 2:
+        nd[2] &= ~(0xf0);
+        nd[3] &= ~(0x3f);
+        break;
+    case 3:
+        nd[4] = 0x00;
+        nd[5] &= ~(0x03);
+        break;
+    case 4:
+        nd[5] &= ~(0xfc);
+        nd[6] &= ~(0x0f);
+        break;
+    case 5:
+        nd[6] &= ~(0xf0);
+        nd[7] &= ~(0x3f);
+        break;
+    default:
+        break;
+    }
+}
+
+
 /* Event handler for the library USB Connection event. */
 void EVENT_USB_Device_Connect(void) {
     //LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
@@ -557,5 +707,176 @@ void EVENT_CDC_Device_ControLineStateChanged(USB_ClassInfo_CDC_Device_t* const C
     /* Let us know what the host is up to (one byte -- no need for
        atomic) */
     dtr_status = CurrentDTRState;
+}
+
+ISR(PCINT0_vect) {
+    uint8_t temp = 0x00;
+
+    if (!(PINB & 0x20)) {
+
+        /* EN on max6818 */
+        PORTC &= ~(1 << PC2);
+        _delay_us(1);
+
+        /* Read pins */
+        pa = (PINA & 0x1f);
+        temp = pa ^ pa_store;
+        test = temp;
+
+        if (pcnt_lktb[temp] == 1) {
+            switch(temp) {
+            case SW_TSET:
+
+                if (!(pa & SW_TSET)) {
+                    //PORTC |= (1 << PC7);
+                    time_to_nix_digits(the_time, &time_setting);
+                    nixie_mode = NIXIE_SET_MODE;
+                } else {
+                    //PORTC &= ~(1 << PC7);
+                    /* Check and adjust all digits to meet time limits */
+                    if (time_setting.tens_hours == 2) {
+                        if (time_setting.hours > 3) {
+                            time_setting.hours = 0;
+                        }
+                    }
+
+                    set_digit = 5;
+                    
+                    //set_system_time(time_setting);
+                    if (mode == GPS_FIX_NONE) {
+                        mode = MAN_SET_TIME;
+                    }
+                    
+                    nixie_mode = NIXIE_TIME_MODE;
+
+                }
+                break;
+            case SW_NEXT:
+                if (nixie_mode == NIXIE_SET_MODE) {
+                    if (!(pa & SW_NEXT)) {
+                        set_digit--;
+                        if (set_digit > 5) {
+                            set_digit = 5;
+                        }
+
+                        /* Check and adjust all digits to meet time limits */
+                        if (time_setting.tens_hours == 2) {
+                            if (time_setting.hours > 3) {
+                                time_setting.hours = 0;
+                            }
+                        }
+                        
+
+                    }
+                }
+                break;
+            case SW_TUP:
+                if (nixie_mode == NIXIE_SET_MODE) {
+                    if (!(pa & SW_TUP)){
+                        if (set_digit == 5) {
+                            time_setting.tens_hours++;
+                            if (time_setting.tens_hours > 2) {
+                                time_setting.tens_hours = 0;
+                            }
+                        } else if (set_digit == 4) {
+                            time_setting.hours++;
+                            if (time_setting.tens_hours == 2) {
+                                if (time_setting.hours > 3) {
+                                    time_setting.hours = 0;
+                                }
+                            } else {
+                                if (time_setting.hours > 9) {
+                                    time_setting.hours = 0;
+                                }
+                            }
+                        } else if (set_digit == 3) {
+                            time_setting.tens_minutes++;
+                            if (time_setting.tens_minutes > 5) {
+                                time_setting.tens_minutes = 0;
+                            }
+                        } else if (set_digit == 2) {
+                            time_setting.minutes++;
+                            if (time_setting.minutes > 9) {
+                                time_setting.minutes = 0;
+                            }
+                        } else if (set_digit == 1) {
+                            time_setting.tens_seconds++;
+                            if (time_setting.tens_seconds > 5) {
+                                time_setting.tens_seconds = 0;
+                            }
+                        } else if (set_digit == 0) {
+                            time_setting.seconds++;
+                            if (time_setting.seconds > 9) {
+                                time_setting.seconds = 0;
+                            }
+                        }
+
+
+                    }
+                }
+                break;
+            case SW_TDOWN:
+                if (nixie_mode == NIXIE_SET_MODE) {
+                    if (!(pa & SW_TDOWN)){
+                        if (set_digit == 5) {
+                            time_setting.tens_hours--;
+                            if (time_setting.tens_hours > 2) {
+                                time_setting.tens_hours = 2;
+                            }
+                        } else if (set_digit == 4) {
+                            time_setting.hours--;
+                            if (time_setting.tens_hours == 2) {
+                                if (time_setting.hours > 3) {
+                                    time_setting.hours = 3;
+                                }
+                            } else {
+                                if (time_setting.hours > 9) {
+                                    time_setting.hours = 9;
+                                }
+                            }
+                        } else if (set_digit == 3) {
+                            time_setting.tens_minutes--;
+                            if (time_setting.tens_minutes > 5) {
+                                time_setting.tens_minutes = 5;
+                            }
+                        } else if (set_digit == 2) {
+                            time_setting.minutes--;
+                            if (time_setting.minutes > 9) {
+                                time_setting.minutes = 9;
+                            }
+                        } else if (set_digit == 1) {
+                            time_setting.tens_seconds--;
+                            if (time_setting.tens_seconds > 5) {
+                                time_setting.tens_seconds = 5;
+                            }
+                        } else if (set_digit == 0) {
+                            time_setting.seconds--;
+                            if (time_setting.seconds > 9) {
+                                time_setting.seconds = 9;
+                            }
+                        }
+
+                    }
+
+                }
+                break;
+            case SW_SHDN:
+                if (!(pa & SW_SHDN)) {
+                    hv = 0x01;
+                } else {
+                    hv = 0x00;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+            
+        pa_store = pa;
+
+        /* EN back high (resets CH) */
+        _delay_us(1);
+        PORTC |= (1 << PC2);
+    }
 }
 

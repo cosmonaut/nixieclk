@@ -82,7 +82,25 @@ uint8_t ds3231_init(void) {
 }
 
 /* Set ds3231 time */
-void ds3231_set_time(gps_rmc_time_t time) {
+void ds3231_set_time_gps(gps_rmc_time_t time) {
+    while(TWI_busy){};
+
+    /* word address for time set start */
+    TWI_buffer_out[0] = 0x00;
+    TWI_buffer_out[1] = dectobcd(time.seconds);
+    TWI_buffer_out[2] = dectobcd(time.minutes);
+    /* maintain 24-hour setting */
+    TWI_buffer_out[3] = (~(0xc0) & dectobcd(time.hours));
+
+    /* write (UTC) time to chip */
+    TWI_master_start_write(DS3231_ADDR, 4);
+    
+    while(TWI_busy){};
+    return;
+}
+
+/* Set ds3231 time */
+void ds3231_set_time(nixie_time_t time) {
     while(TWI_busy){};
 
     /* word address for time set start */
