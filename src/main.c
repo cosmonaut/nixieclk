@@ -28,8 +28,11 @@
 #define NIXIE_TIME_MODE 0
 #define NIXIE_WAVE_MODE 1
 #define NIXIE_SET_MODE 2
-#define NIXIE_DATE_MODE 3
-#define NIXIE_TEMP_MODE 4
+#define NIXIE_SET_COUNT_MODE 3
+#define NIXIE_DATE_MODE 4
+#define NIXIE_TEMP_MODE 5
+#define NIXIE_COUNT_MODE 6
+#define NIXIE_BOUNCE_MODE 7
 
 #define SEC_OS 0
 #define TENS_SEC_OS 10
@@ -74,6 +77,9 @@ nixie_time_t the_time = {.seconds = 0,
 nixie_date_t the_date = {.day = 1,
                          .month = 1,
                          .year = 0};
+nixie_time_t countdown_time = {.seconds = 0,
+                               .minutes = 0,
+                               .hours = 0};
 nixie_time_digits_t nixie_time = {.seconds = 0, 
                                   .tens_seconds = 0, 
                                   .minutes = 0, 
@@ -169,6 +175,10 @@ int main(void) {
     uint8_t date_cnt = 0;
     float temp = 0;
     uint8_t nixie_mode_last = 0;
+    /* bounce mode stuff */
+    uint8_t bnc_cnt = 0;
+    uint8_t bnc_dig = 5;
+    uint8_t bnc_sw = 0;
 
     /* Let ISP verification work? */
     //_delay_ms(5);
@@ -286,6 +296,10 @@ int main(void) {
             /* Reset all mode-specific vars */
             date_cnt = 0;
             sw_cnt = 0;
+
+            bnc_sw = 0;
+            bnc_dig = 5;
+            bnc_cnt = 0;
         }
 
         //while(1) {
@@ -314,7 +328,7 @@ int main(void) {
             PORTC &= ~(1 << PC0);
             
             _delay_ms(50);
-        } else if (nixie_mode == NIXIE_SET_MODE) {
+        } else if ((nixie_mode == NIXIE_SET_MODE) || (nixie_mode == NIXIE_SET_COUNT_MODE)) {
             memset((void *)nixie_digits, 0x00, 8);
             nixie_time_to_nixie_digits(time_setting, nixie_digits);
             if (blink_sw) {
@@ -376,7 +390,53 @@ int main(void) {
             }
 
             _delay_ms(10);            
+        } else if (nixie_mode == NIXIE_BOUNCE_MODE) {
+            memset((void *)nixie_digits, 0x00, 8);
+            nixie_time.tens_hours = 0;
+            nixie_time.hours = 0;
+            nixie_time.tens_minutes = 0;
+            nixie_time.minutes = 0;
+            nixie_time.tens_seconds = 0;
+            nixie_time.seconds = 0;
+
+            nixie_time_to_nixie_digits(nixie_time, nixie_digits);
+
+            for (j = 0; j < 6; j++) {
+                if (j != bnc_dig) {
+                    blank_digit(j, nixie_digits);
+                }
+            }
+
+            for (j = sizeof(nixie_digits); j-- > 0; ) {
+                spi_master_tx(nixie_digits[j]);
+            }
+            /* Latch the data */
+            PORTC |= (1 << PC0);
+            _delay_us(1);
+            PORTC &= ~(1 << PC0);
+
+            bnc_cnt++;
+            if (bnc_cnt > 8) {
+                bnc_cnt = 0;
+
+                if (bnc_sw) {
+                    bnc_dig++;
+                    if (bnc_dig > 5) {
+                        bnc_dig = 5;
+                        bnc_sw = 0;
+                    }
+                } else {
+                    bnc_dig--;
+                    if (bnc_dig > 5) {
+                        bnc_dig = 0;
+                        bnc_sw = 1;
+                    }
+                }
+            }
+
+            _delay_ms(10);
         }
+
 
         /* USB rx commands */
         if (USB_DeviceState == DEVICE_STATE_Configured) {
@@ -587,6 +647,8 @@ void setup_hardware(void) {
 
     /* Set port A as input */
     DDRA = 0x00;
+    pa = (PINA & 0x1f);
+    pa_store = pa;
     /* Set pcint5 as input */
     DDRB &= ~(1 << PB5);
 
@@ -614,10 +676,11 @@ void increment_time(void) {
         the_time.hours = 0;
     }
 
-    time_to_nix_digits(the_time, &nixie_time);
+    //time_to_nix_digits(the_time, &nixie_time);
 
     /* Display on tubes if we're in time mode */
     if (nixie_mode == NIXIE_TIME_MODE) {
+        time_to_nix_digits(the_time, &nixie_time);
         /* Insert next two lines into display only code */
         memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
         nixie_time_to_nixie_digits(nixie_time, nixie_digits);
@@ -631,6 +694,47 @@ void increment_time(void) {
         PORTC |= (1 << PC0);
         _delay_us(1);
         PORTC &= ~(1 << PC0);
+    }
+
+    if (nixie_mode == NIXIE_COUNT_MODE) {
+        countdown_time.seconds--;
+
+        if (countdown_time.seconds == 0) {
+            if ((countdown_time.minutes == 0) && 
+                (countdown_time.hours == 0)) {
+
+                nixie_mode = NIXIE_BOUNCE_MODE;
+            }
+        }
+
+        if (countdown_time.seconds == 255) {
+            countdown_time.seconds = 59;
+            countdown_time.minutes--;
+            if (countdown_time.minutes == 255) {
+                countdown_time.minutes = 59;
+                countdown_time.hours--;
+                if (countdown_time.hours == 255) {
+                    countdown_time.hours = 0;
+                    nixie_mode = NIXIE_BOUNCE_MODE;
+                }
+            }
+        }
+
+        time_to_nix_digits(countdown_time, &nixie_time);
+
+        memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
+        nixie_time_to_nixie_digits(nixie_time, nixie_digits);
+
+        /* blast some data to HV5522s (reverse order, 10s hours first,
+           seconds last */
+        for (j = sizeof(nixie_digits); j-- > 0; ) {
+            spi_master_tx(nixie_digits[j]);
+        }
+        /* Latch the data */
+        PORTC |= (1 << PC0);
+        _delay_us(1);
+        PORTC &= ~(1 << PC0);
+
     }
 }
 
@@ -844,32 +948,68 @@ ISR(PCINT0_vect) {
             switch(temp) {
             case SW_TSET:
 
-                if (!(pa & SW_TSET)) {
+                //if (!(pa & SW_TSET)) {
+                if ((pa & 0x0f) == (~SW_TSET & 0x0f)) {
                     //PORTC |= (1 << PC7);
                     time_to_nix_digits(the_time, &time_setting);
                     nixie_mode = NIXIE_SET_MODE;
+                } else if ((pa & 0x0f) == (~(SW_TSET | SW_NEXT) & 0x0f)) {
+                    PORTC |= (1 << PC7);
+                    nixie_mode = NIXIE_SET_COUNT_MODE;
+                    time_setting.tens_hours = 0;
+                    time_setting.hours = 0;
+                    time_setting.tens_minutes = 0;
+                    time_setting.minutes = 0;
+                    time_setting.tens_seconds = 0;
+                    time_setting.seconds = 0;
                 } else {
-                    //PORTC &= ~(1 << PC7);
-                    /* Check and adjust all digits to meet time limits */
-                    if (time_setting.tens_hours == 2) {
-                        if (time_setting.hours > 3) {
-                            time_setting.hours = 0;
+                    if (nixie_mode == NIXIE_SET_MODE) {
+                        PORTC &= ~(1 << PC7);
+                        /* Check and adjust all digits to meet time limits */
+                        if (time_setting.tens_hours == 2) {
+                            if (time_setting.hours > 3) {
+                                time_setting.hours = 0;
+                            }
+                        }
+
+                        set_digit = 5;
+                    
+                        //set_system_time(time_setting);
+                        if (mode == GPS_FIX_NONE) {
+                            mode = MAN_SET_TIME;
+                        }
+                    
+                        nixie_mode = NIXIE_TIME_MODE;
+                    } else if (nixie_mode == NIXIE_SET_COUNT_MODE) {
+                        PORTC &= ~(1 << PC7);
+                        countdown_time.hours = time_setting.tens_hours*10 + time_setting.hours;
+                        countdown_time.minutes = time_setting.tens_minutes*10 + time_setting.minutes;
+                        countdown_time.seconds = time_setting.tens_seconds*10 + time_setting.seconds;
+                        set_digit = 5;
+
+                        if (countdown_time.seconds > 99) {
+                            countdown_time.seconds = 99;
+                        }
+
+                        if (countdown_time.minutes > 99) {
+                            countdown_time.minutes = 99;
+                        }
+
+                        if (countdown_time.hours > 99) {
+                            countdown_time.hours = 99;
+                        }
+
+
+                        if ((countdown_time.hours + countdown_time.minutes + countdown_time.seconds) == 0) {
+                            nixie_mode = NIXIE_TIME_MODE;
+                        } else {
+                            nixie_mode = NIXIE_COUNT_MODE;
                         }
                     }
-
-                    set_digit = 5;
-                    
-                    //set_system_time(time_setting);
-                    if (mode == GPS_FIX_NONE) {
-                        mode = MAN_SET_TIME;
-                    }
-                    
-                    nixie_mode = NIXIE_TIME_MODE;
-
                 }
                 break;
             case SW_NEXT:
-                if (nixie_mode == NIXIE_SET_MODE) {
+                if ((nixie_mode == NIXIE_SET_MODE) || (nixie_mode == NIXIE_SET_COUNT_MODE)) {
                     if (!(pa & SW_NEXT)) {
                         set_digit--;
                         if (set_digit > 5) {
@@ -894,7 +1034,7 @@ ISR(PCINT0_vect) {
 
                 break;
             case SW_TUP:
-                if (nixie_mode == NIXIE_SET_MODE) {
+                if ((nixie_mode == NIXIE_SET_MODE) || (nixie_mode == NIXIE_SET_COUNT_MODE)) {
                     if (!(pa & SW_TUP)){
                         if (set_digit == 5) {
                             time_setting.tens_hours++;
@@ -936,10 +1076,15 @@ ISR(PCINT0_vect) {
 
 
                     }
+                } else {
+                    if ((pa & 0x0f) == 0x0b) {
+                        nixie_mode = NIXIE_WAVE_MODE;
+                        set_digit = 5;
+                    }
                 }
                 break;
             case SW_TDOWN:
-                if (nixie_mode == NIXIE_SET_MODE) {
+                if ((nixie_mode == NIXIE_SET_MODE) || (nixie_mode == NIXIE_SET_COUNT_MODE)) {
                     if (!(pa & SW_TDOWN)){
                         if (set_digit == 5) {
                             time_setting.tens_hours--;
@@ -981,6 +1126,11 @@ ISR(PCINT0_vect) {
 
                     }
 
+                } else {
+                    if ((pa & 0x0f) == 0x07) {
+                        nixie_mode = NIXIE_TIME_MODE;
+                        set_digit = 5;
+                    }
                 }
                 break;
             case SW_SHDN:
