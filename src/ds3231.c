@@ -137,6 +137,18 @@ void ds3231_set_date(gps_rmc_date_t date) {
     return;
 }    
 
+/* Get Date */
+void ds3231_get_date(nixie_date_t *date) {
+    while(TWI_busy) {};
+
+    TWI_buffer_out[0] = 0x04;
+    TWI_master_start_write_then_read(DS3231_ADDR, 1, DS3231_DATE_NREG);
+    while(TWI_busy) {};
+
+    date->day = (TWI_buffer_in[0] & 0x0f) + ((TWI_buffer_in[0] & 0x30) >> 4)*10;
+    date->month = (TWI_buffer_in[1] & 0x0f) + ((TWI_buffer_in[1] & 0x10) >> 4)*10;
+    date->year = (TWI_buffer_in[2] & 0x0f) + ((TWI_buffer_in[2] & 0xf0) >> 4)*10;
+}
 
 // uint8_t ds3231_get_datetime() {
 
@@ -192,7 +204,7 @@ uint8_t ds3231_get_reg_as_int(uint8_t s) {
 }
 
 /* Convert DS3231 hours register into a number (0 - 23) */
-uint8_t ds3231_get_hours(uint8_t h) {
+static uint8_t _ds3231_get_hours(uint8_t h) {
     return((h & 0x0F) + 10*((h & 0x30) >> 4));
 }
 
@@ -215,13 +227,13 @@ uint8_t ds3231_print_info(char *print_buf) {
         return 1;
     }
     
-    j += sprintf(print_buf + j, "Seconds: %i\n", ds3231_get_seconds(reg_buf[0]));
-    j += sprintf(print_buf + j, "Minutes: %i\n", ds3231_get_minutes(reg_buf[1]));
-    j += sprintf(print_buf + j, "Hours: %i\n", ds3231_get_hours(reg_buf[2]));
+    j += sprintf(print_buf + j, "Seconds: %i\n", _ds3231_get_seconds(reg_buf[0]));
+    j += sprintf(print_buf + j, "Minutes: %i\n", _ds3231_get_minutes(reg_buf[1]));
+    j += sprintf(print_buf + j, "Hours: %i\n", _ds3231_get_hours(reg_buf[2]));
     j += sprintf(print_buf + j, "Day: %i\n", reg_buf[3]);
-    j += sprintf(print_buf + j, "Date: %i\n", ds3231_get_date(reg_buf[4]));
-    j += sprintf(print_buf + j, "Month: %i\n", ds3231_get_hours(reg_buf[5]));
-    j += sprintf(print_buf + j, "Year: %i\n", ds3231_get_year(reg_buf[6]));
+    j += sprintf(print_buf + j, "Date: %i\n", _ds3231_get_date(reg_buf[4]));
+    j += sprintf(print_buf + j, "Month: %i\n", _ds3231_get_hours(reg_buf[5]));
+    j += sprintf(print_buf + j, "Year: %i\n", _ds3231_get_year(reg_buf[6]));
     j += sprintf(print_buf + j, "Control: 0x%02X\n", reg_buf[14]);
     j += sprintf(print_buf + j, "Ctrl/Stat: 0x%02X\n", reg_buf[15]);
     j += sprintf(print_buf + j, "Aging: 0x%02X\n", reg_buf[16]);

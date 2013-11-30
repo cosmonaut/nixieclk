@@ -28,6 +28,8 @@
 #define NIXIE_TIME_MODE 0
 #define NIXIE_WAVE_MODE 1
 #define NIXIE_SET_MODE 2
+#define NIXIE_DATE_MODE 3
+#define NIXIE_TEMP_MODE 4
 
 #define SEC_OS 0
 #define TENS_SEC_OS 10
@@ -46,6 +48,8 @@
 static inline uint8_t tmod(uint8_t);
 static inline uint8_t dectobcd(uint8_t);
 static inline void time_to_nix_digits(nixie_time_t, nixie_time_digits_t *);
+static void date_to_nixie_digits(nixie_date_t, volatile uint8_t *);
+static void temp_to_nixie_digits(float, volatile uint8_t *);
 static inline void nixie_time_to_nixie_digits(nixie_time_digits_t, volatile uint8_t *);
 static inline void blank_digit(uint8_t, volatile uint8_t *);
 static void set_system_time(nixie_time_digits_t);
@@ -67,6 +71,9 @@ volatile uint8_t set_digit = 5;
 nixie_time_t the_time = {.seconds = 0, 
                          .minutes = 0, 
                          .hours = 0}; 
+nixie_date_t the_date = {.day = 1,
+                         .month = 1,
+                         .year = 0};
 nixie_time_digits_t nixie_time = {.seconds = 0, 
                                   .tens_seconds = 0, 
                                   .minutes = 0, 
@@ -159,8 +166,15 @@ int main(void) {
     uint8_t sw_cnt = 0;
     uint8_t blink_sw = 0;
 
+    uint8_t date_cnt = 0;
+    float temp = 0;
+    uint8_t nixie_mode_last = 0;
+
     /* Let ISP verification work? */
     //_delay_ms(5);
+
+    nixie_mode = NIXIE_TIME_MODE;
+    nixie_mode_last = NIXIE_TIME_MODE;
 
     /* Initialize at90usb1287 peripherals */
     setup_hardware();
@@ -267,6 +281,13 @@ int main(void) {
         }
         
 
+        if (nixie_mode != nixie_mode_last) {
+            nixie_mode_last = nixie_mode;
+            /* Reset all mode-specific vars */
+            date_cnt = 0;
+            sw_cnt = 0;
+        }
+
         //while(1) {
         if (nixie_mode == NIXIE_WAVE_MODE) {
             memset((void *)nixie_digits, 0x00, 8);
@@ -293,9 +314,7 @@ int main(void) {
             PORTC &= ~(1 << PC0);
             
             _delay_ms(50);
-        }
-
-        if (nixie_mode == NIXIE_SET_MODE) {
+        } else if (nixie_mode == NIXIE_SET_MODE) {
             memset((void *)nixie_digits, 0x00, 8);
             nixie_time_to_nixie_digits(time_setting, nixie_digits);
             if (blink_sw) {
@@ -316,6 +335,47 @@ int main(void) {
             }
 
             _delay_ms(10);
+        } else if (nixie_mode == NIXIE_DATE_MODE) {
+            ds3231_get_date(&the_date);
+            memset((void *)nixie_digits, 0x00, 8);
+            date_to_nixie_digits(the_date, nixie_digits);
+
+            for (j = sizeof(nixie_digits); j-- > 0; ) {
+                spi_master_tx(nixie_digits[j]);
+            }
+            /* Latch the data */
+            PORTC |= (1 << PC0);
+            _delay_us(1);
+            PORTC &= ~(1 << PC0);
+            
+            date_cnt++;
+            if (date_cnt > 199) {
+                date_cnt = 0;
+                nixie_mode = NIXIE_TEMP_MODE;
+                //nixie_mode = NIXIE_TIME_MODE;
+            }
+
+            _delay_ms(10);
+        } else if (nixie_mode == NIXIE_TEMP_MODE) {
+            temp = ds3231_get_temp();
+            memset((void *)nixie_digits, 0x00, 8);
+            temp_to_nixie_digits(temp, nixie_digits);
+
+            for (j = sizeof(nixie_digits); j-- > 0; ) {
+                spi_master_tx(nixie_digits[j]);
+            }
+            /* Latch the data */
+            PORTC |= (1 << PC0);
+            _delay_us(1);
+            PORTC &= ~(1 << PC0);
+
+            date_cnt++;
+            if (date_cnt > 199) {
+                date_cnt = 0;
+                nixie_mode = NIXIE_TIME_MODE;
+            }
+
+            _delay_ms(10);            
         }
 
         /* USB rx commands */
@@ -397,9 +457,13 @@ int main(void) {
                     // nmea_flush();
                     // uart_init(57600);
                 } else if ((char)my_byte == 'i') {
-                    nixie_mode = NIXIE_WAVE_MODE;
+                    if (nixie_mode != NIXIE_SET_MODE) {
+                        nixie_mode = NIXIE_WAVE_MODE;
+                    }
                 } else if ((char)my_byte == 'o') {
-                    nixie_mode = NIXIE_TIME_MODE;
+                    if (nixie_mode != NIXIE_SET_MODE) {
+                        nixie_mode = NIXIE_TIME_MODE;
+                    }
                 } else if ((char)my_byte == 'k') {
                     /* debug for switches */
                     sprintf(sbuf, "PA: %02x\n", pa);
@@ -608,6 +672,62 @@ static inline void time_to_nix_digits(nixie_time_t t, nixie_time_digits_t *td) {
     td->tens_hours = ((p >> 4) & 0x0f);
 }
 
+static void date_to_nixie_digits(nixie_date_t d, volatile uint8_t *nd) {
+    if (nd != 0) {
+        memset((void *)nd, 0x00, 8);
+        uint8_t n = 0;
+        uint8_t temp = 0x00;
+
+        temp = dectobcd(d.day);
+        n = SEC_OS + (temp & 0x0f);
+        nd[n/8] = (1 << n%8);
+        n = TENS_SEC_OS + ((temp & 0xf0) >> 4);
+        nd[n/8] |= (1 << n%8);
+
+        temp = dectobcd(d.month);
+        n = MIN_OS + (temp & 0x0f);
+        nd[n/8] |= (1 << n%8);
+        n = TENS_MIN_OS + ((temp & 0xf0) >> 4);
+        nd[n/8] |= (1 << n%8);
+
+        temp = dectobcd(d.year);
+        n = HR_OS + (temp & 0x0f);
+        nd[n/8] |= (1 << n%8);
+        n = TENS_HR_OS + ((temp & 0xf0) >> 4);
+        nd[n/8] |= (1 << n%8);
+    }
+}
+
+static void temp_to_nixie_digits(float temp, volatile uint8_t *nd) {
+    if (nd != 0) {
+        memset((void *)nd, 0x00, 8);
+        uint8_t n = 0;
+        
+        uint8_t c = 0;
+        uint8_t d = 0;
+
+        uint8_t bcd = 0;
+
+        /* Split temperature into two ints */
+        c = (uint8_t)temp;
+        d = fmod(round(temp*100.0), 100.0);
+
+        bcd = dectobcd(d);
+        
+        n = MIN_OS + (bcd & 0x0f);
+        nd[n/8] |= (1 << n%8);
+        n = TENS_MIN_OS + ((bcd & 0xf0) >> 4);
+        nd[n/8] |= (1 << n%8);
+
+        bcd = dectobcd(c);
+
+        n = HR_OS + (bcd & 0x0f);
+        nd[n/8] |= (1 << n%8);
+        n = TENS_HR_OS + ((bcd & 0xf0) >> 4);
+        nd[n/8] |= (1 << n%8);
+    }
+}
+
 /* nd should be an array of bytes of at least size 8 */    
 static inline void nixie_time_to_nixie_digits(nixie_time_digits_t t, volatile uint8_t *nd) {
     if (nd != 0) {
@@ -670,11 +790,13 @@ void EVENT_USB_Device_Connect(void) {
     //     CDC_Device_Flush(&VirtualSerial_CDC_Interface);
     //     CDC_Device_SendString(&VirtualSerial_CDC_Interface, "FLUSHED!");
     // }
+    //PORTC |= (1 << PC7);
 }
 
 /* Event handler for the library USB Disconnection event. */
 void EVENT_USB_Device_Disconnect(void) {
     //LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
+    //PORTC &= ~(1 << PC7);
 }
 
 /* Event handler for the library USB Configuration Changed event. */
@@ -682,12 +804,6 @@ void EVENT_USB_Device_ConfigurationChanged(void) {
     bool ConfigSuccess = true;
 
     ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
-
-    /* This doesn't always work... ? */
-    if (USB_DeviceState == DEVICE_STATE_Configured) {
-        CDC_Device_Flush(&VirtualSerial_CDC_Interface);
-    }
-
 }
 
 /* Event handler for the library USB Control Request reception event. */
@@ -768,7 +884,13 @@ ISR(PCINT0_vect) {
                         
 
                     }
+                } else {
+                    if (!(pa & SW_NEXT)) {
+                        /* Set date mode, clock will display date/temp */
+                        nixie_mode = NIXIE_DATE_MODE;
+                    }
                 }
+
                 break;
             case SW_TUP:
                 if (nixie_mode == NIXIE_SET_MODE) {

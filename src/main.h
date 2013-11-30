@@ -49,6 +49,12 @@ typedef struct {
 } nixie_time_t;
 
 typedef struct {
+    volatile uint8_t day;
+    volatile uint8_t month;
+    volatile uint8_t year;
+} nixie_date_t;
+
+typedef struct {
     volatile uint8_t seconds;
     volatile uint8_t tens_seconds;
     volatile uint8_t minutes;
