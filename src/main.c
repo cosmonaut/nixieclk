@@ -615,12 +615,13 @@ void increment_time(void) {
     }
 
     time_to_nix_digits(the_time, &nixie_time);
-    /* Insert next two lines into display only code */
-    memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
-    nixie_time_to_nixie_digits(nixie_time, nixie_digits);
 
     /* Display on tubes if we're in time mode */
     if (nixie_mode == NIXIE_TIME_MODE) {
+        /* Insert next two lines into display only code */
+        memset((void *)nixie_digits, 0x00, sizeof(nixie_digits));
+        nixie_time_to_nixie_digits(nixie_time, nixie_digits);
+
         /* blast some data to HV5522s (reverse order, 10s hours first,
            seconds last */
         for (j = sizeof(nixie_digits); j-- > 0; ) {
