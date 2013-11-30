@@ -169,6 +169,8 @@ int main(void) {
     uint16_t k = 0;
     uint8_t p = 0;
 
+    uint8_t wave_cnt = 0;
+
     uint8_t sw_cnt = 0;
     uint8_t blink_sw = 0;
 
@@ -294,6 +296,8 @@ int main(void) {
         if (nixie_mode != nixie_mode_last) {
             nixie_mode_last = nixie_mode;
             /* Reset all mode-specific vars */
+            k = 0;
+            wave_cnt = 0;
             date_cnt = 0;
             sw_cnt = 0;
 
@@ -317,7 +321,11 @@ int main(void) {
             nixie_digits[p/8] |= (1 << p%8);
             p = TENS_HR_OS + dig_loop[(k + 5)%18];
             nixie_digits[p/8] |= (1 << p%8);
-            k++;
+            
+            if (wave_cnt > 4) {
+                k++;
+                wave_cnt = 0;
+            }
 
             for (j = sizeof(nixie_digits); j-- > 0; ) {
                 spi_master_tx(nixie_digits[j]);
@@ -327,7 +335,9 @@ int main(void) {
             _delay_us(1);
             PORTC &= ~(1 << PC0);
             
-            _delay_ms(50);
+            wave_cnt++;
+
+            _delay_ms(10);
         } else if ((nixie_mode == NIXIE_SET_MODE) || (nixie_mode == NIXIE_SET_COUNT_MODE)) {
             memset((void *)nixie_digits, 0x00, 8);
             nixie_time_to_nixie_digits(time_setting, nixie_digits);
